@@ -1,0 +1,19 @@
+dataset:
+  ann_path: unknown
+  vol_path: unknown
+optimizer:
+  choice: Adam
+  initial_lr: 0.0001
+train:
+  logger: True
+  id: UnetA_bs64t1_model
+  logger_path: runs/
+  weights_path: outputs/weights/
+  batch_size: 16
+  epochs: 1000
+  depth: 4
+  metric: Dice Coefficient
+  test_size: .2
+  random_state: 49
+
+
