@@ -11,7 +11,7 @@ python pipeline.py
 
 **download.py** 
   
-  - Downloads DCV annotations from WebKnossos, the digital platform we use for painting cellular features
+  - Downloads DCV annotations from WebKnossos, the digital platform we use for painting cellular features 
 
 **pipeline.py**
 
