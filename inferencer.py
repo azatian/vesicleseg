@@ -7,23 +7,9 @@ from neurometry import ml
 import copy
 from torchvision import transforms
 import skimage.measure
+import sys
+import time
 
-# %%
-sample = pd.read_csv("data/codex_5000sample_slicekey_9_18_23.csv")
-df = pd.read_csv("data/codex_5000sample_9_18_23.csv")
-
-db = SqliteDict("data/root_to_mask_9_18_23.sqlite", encode="ascii")
-
-#convert bytes to int
-# %%
-def bytes_to_int(b):
-    return int.from_bytes(b, byteorder="little")
-
-#convert int to bytes
-def int_to_bytes(i):
-    return i.to_bytes((i.bit_length() + 7) // 8, byteorder='little')
-
-# %%
 #calculates what percentage of the cutout is filled
 def signal(slice, x, y):
     total = np.count_nonzero(slice)
@@ -116,64 +102,114 @@ def pipeline_for_vesicle_saturation(matrix, cutoff):
     #object_areas = [obj["area"] for obj in objects]
     #object_ecc = [obj["eccentricity"] for obj in objects]
     #return area, count, object_areas, object_ecc
-    return area, final_count
+    return area, final_count, result
 
 def flatten(l):
     return [item for sublist in l for item in sublist]
 
 
-config = ml.load_config("config.yaml")
-final_activation = ml.get_final_activation()
-model = ml.UNet(in_channels=1, out_channels=1, depth=config["train"]["depth"], final_activation=final_activation)
+def main() -> None:
+    args = sys.argv[1:]
+    syn = args[0]
+    start_time = time.time()
 
-ml.load_weights(model, config["train"]["weights_path"]+config["train"]["id"]+".pth")
+    block = syn
+    config = ml.load_config("config.yaml")
+    final_activation = ml.get_final_activation()
+    global model
+    model = ml.UNet(in_channels=1, out_channels=1, depth=config["train"]["depth"], final_activation=final_activation)
 
-model.eval()
+    ml.load_weights(model, config["train"]["weights_path"]+config["train"]["id"]+".pth")
 
-# %%
-database = SqliteDict('data/codex_5000sample_11_15_23.sqlite', autocommit=True)
-counter = 0
-for ex in df["root_id"]:
-    counter += 1
-    print(counter)
-    if ex not in database:
-        try:
-            cutout = db[int_to_bytes(ex)]
-        except:
-            pass
-        else:
-            z = cutout.shape[2]
-            areas = []
-            counts = []
-            sizes = []
-            eccentricities = []
-            for i in range(z):
-                #empty
-                if not np.any(cutout[:,:,i]):
-                    areas.append(0)
-                    counts.append(0)
-                    #sizes.append([])
-                    #eccentricities.append([])
-                else:
-                    #area, count, size, ecc = pipeline_for_vesicle_saturation(cutout[:,:,i], .10)
-                    try:
-                        area, count = pipeline_for_vesicle_saturation(cutout[:,:,i], .10)
-                        areas.append(area)
-                        counts.append(count)
-                    except:
+    model.eval()
+
+    file_name = "root_to_mask_"
+    block = syn 
+    extension = ".sqlite"
+    db  = SqliteDict("partitions/db/" + file_name + block + extension, encode="ascii")
+
+    master = pd.read_csv("partitions/master/codex_old_to_new_rootid_mapper_master.csv")
+    master = master[master["block"] == int(block)]
+
+    errors = []
+    #sample = pd.read_csv("data/codex_5000sample_slicekey_9_18_23.csv")
+    #df = pd.read_csv("data/codex_5000sample_9_18_23.csv")
+    #db = SqliteDict("data/root_to_mask_9_18_23.sqlite", encode="ascii")
+
+    # %%
+    database = SqliteDict('partitions/db/saturations_' + block + '.sqlite', autocommit=True)
+    predictions = SqliteDict('partitions/predictions/block_' + block + '.sqlite', autocommit=True)
+    counter = 0
+    #for ex in df["root_id"]:
+    for index, row in master.iterrows():
+        old_id = str(row["old_id"])
+        new_id = str(row["new_id"])
+        
+        #if ex not in database:
+        if new_id in db:
+            try:
+                cutout = db[new_id]
+                #cutout = db[int_to_bytes(ex)]
+            except:
+                errors.append("OLD ID: " + old_id + " NEW ID: " + new_id)
+                errors.append("\n")
+                pass
+            else:
+                z = cutout.shape[2]
+                areas = []
+                counts = []
+                #sizes = []
+                #eccentricities = []
+                for i in range(z):
+                    #empty
+                    if not np.any(cutout[:,:,i]):
                         areas.append(0)
                         counts.append(0)
-                    #sizes.append(size)
-                    #eccentricities.append(ecc)
+                        #sizes.append([])
+                        #eccentricities.append([])
+                    else:
+                        #area, count, size, ecc = pipeline_for_vesicle_saturation(cutout[:,:,i], .10)
+                        try:
+                            area, count, result = pipeline_for_vesicle_saturation(cutout[:,:,i], .10)
+                            areas.append(area)
+                            counts.append(count)
+                            predictions[old_id + "_" + str(i)] = result
+                        except:
+                            areas.append("issue")
+                            counts.append("issue")
+                        #sizes.append(size)
+                        #eccentricities.append(ecc)
                 
-            sum_counts = sum(counts)
-            sum_areas = sum(areas)
-            database[ex] = [sum_counts, sum_areas]
+                #maybe save the entire area and count?
+                #sum_counts = sum(counts)
+                #sum_areas = sum(areas)
+                database[old_id] = [counts, areas]
+        
+        counter += 1
+        print(counter, file=sys.stdout)
 
 
-database.close()
+    database.close()
+    predictions.close()
+
+    if len(errors) > 0:
+        file = open("partitions/errors/inf_block_" + block + ".txt", 'w')
+        file.writelines(errors)
+        file.close()
+
+    print("--- %s seconds ---" % (time.time() - start_time), file=sys.stdout)
+
+if __name__ == "__main__":
+    main()
 
 '''
+
+#not needed anymore the following two functions for db access
+def bytes_to_int(b):
+    return int.from_bytes(b, byteorder="little")
+
+def int_to_bytes(i):
+    return i.to_bytes((i.bit_length() + 7) // 8, byteorder='little')
 ex = 720575940629248374
 cutout = db[int_to_bytes(ex)]
 zeroth = cutout[:,:,0]
